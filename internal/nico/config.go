@@ -19,6 +19,7 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -38,6 +39,11 @@ const (
 	DefaultSoftRebootAnnotation    = "nico.nvidia.com/reboot-soft"
 	DefaultHardRebootAnnotation    = "nico.nvidia.com/reboot-hard"
 	DefaultRepairAnnotation        = "nico.nvidia.com/machine-health-issue"
+
+	// DefaultTopologyLabelDomain is the label key domain used for the topology
+	// labels applied to NICo instances. It is also the legacy domain that is
+	// still read, and migrated away from, when a different domain is configured.
+	DefaultTopologyLabelDomain = "nke.nvidia.com"
 )
 
 // ProviderConfig holds provider-wide settings.
@@ -59,6 +65,12 @@ type ProviderConfig struct {
 	// disables the behaviour.
 	RepairAnnotation string
 
+	// TopologyLabelDomain is the key domain (the prefix before the "/") of the
+	// topology labels written to NICo instances: machine-id, site-id,
+	// site-name, vpc-id and vpc-name. Instances that still carry the legacy
+	// DefaultTopologyLabelDomain keys are read and migrated to this domain.
+	TopologyLabelDomain string
+
 	// IdentityValidationTimeout bounds each NicoIdentity check, from token
 	// acquisition through the current-tenant read.
 	IdentityValidationTimeout time.Duration
@@ -74,6 +86,9 @@ func (p *ProviderConfig) BindFlags(fs *flag.FlagSet) {
 	if p.RepairAnnotation == "" {
 		p.RepairAnnotation = DefaultRepairAnnotation
 	}
+	if p.TopologyLabelDomain == "" {
+		p.TopologyLabelDomain = DefaultTopologyLabelDomain
+	}
 	if p.IdentityValidationTimeout == 0 {
 		p.IdentityValidationTimeout = DefaultCredentialValidationTimeout
 	}
@@ -85,13 +100,54 @@ func (p *ProviderConfig) BindFlags(fs *flag.FlagSet) {
 		"CAPI Machine annotation key used to request a graceful reboot with hard fallback.")
 	fs.StringVar(&p.RepairAnnotation, "repair-annotation", p.RepairAnnotation,
 		"Annotation key on the owner CAPI Machine whose presence triggers a repair flag on the NICo instance before deletion. The value is parsed as JSON ({category, summary, details}), or treated as a plain summary with category Other. Leave empty to disable.")
+	fs.StringVar(&p.TopologyLabelDomain, "topology-label-domain", p.TopologyLabelDomain,
+		"Label key domain for the topology labels (machine-id, site-id, site-name, vpc-id, vpc-name) applied to NICo instances. Labels under the legacy nke.nvidia.com domain are still read and migrated.")
 	fs.DurationVar(&p.IdentityValidationTimeout, "provider-identity-validation-timeout", p.IdentityValidationTimeout,
 		"Maximum duration of one NicoIdentity credential check, from token acquisition through the current-tenant read.")
+}
+
+// Topology label names, appended to the label domain to form the full key.
+const (
+	TopologyLabelMachineID = "machine-id"
+	TopologyLabelSiteID    = "site-id"
+	TopologyLabelSiteName  = "site-name"
+	TopologyLabelVPCID     = "vpc-id"
+	TopologyLabelVPCName   = "vpc-name"
+)
+
+// TopologyLabelNames lists every topology label name CAPNICo manages.
+var TopologyLabelNames = []string{
+	TopologyLabelMachineID,
+	TopologyLabelSiteID,
+	TopologyLabelSiteName,
+	TopologyLabelVPCID,
+	TopologyLabelVPCName,
+}
+
+// TopologyLabelKey returns the full label key for name under the configured
+// domain, falling back to DefaultTopologyLabelDomain when none is set.
+func (p ProviderConfig) TopologyLabelKey(name string) string {
+	domain := p.TopologyLabelDomain
+	if domain == "" {
+		domain = DefaultTopologyLabelDomain
+	}
+	return domain + "/" + name
+}
+
+// LegacyTopologyLabelKey returns the label key for name under
+// DefaultTopologyLabelDomain.
+func LegacyTopologyLabelKey(name string) string {
+	return DefaultTopologyLabelDomain + "/" + name
 }
 
 // Validate reports provider settings that cannot work. It checks only the
 // NicoIdentity settings, so existing flag combinations keep their behavior.
 func (p ProviderConfig) Validate() error {
+	if p.TopologyLabelDomain != "" {
+		if errs := validation.IsDNS1123Subdomain(p.TopologyLabelDomain); len(errs) > 0 {
+			return fmt.Errorf("--topology-label-domain %q is invalid: %s", p.TopologyLabelDomain, strings.Join(errs, "; "))
+		}
+	}
 	if p.IdentityValidationTimeout <= 0 {
 		return fmt.Errorf("--provider-identity-validation-timeout must be positive, got %s", p.IdentityValidationTimeout)
 	}

@@ -536,6 +536,20 @@ The key is configurable with a manager flag:
 
 * `--repair-annotation`
 
+## Topology Labels
+
+CAPNICo labels each backing NICo instance with `machine-id`, `site-id`,
+`site-name`, `vpc-id` and `vpc-name`. The label key domain defaults to
+`nke.nvidia.com` and is configurable with a manager flag:
+
+* `--topology-label-domain`
+
+Both forms are read. When a different domain is configured, an instance that
+still carries the legacy `nke.nvidia.com/*` topology keys has them replaced by
+keys under the configured domain on its next reconcile, so only one domain stays
+live. Other labels on the instance are left alone. With the default domain
+nothing changes.
+
 ## Machine Reboot
 
 Set one of these annotations to a non-empty value on the owning CAPI `Machine`.

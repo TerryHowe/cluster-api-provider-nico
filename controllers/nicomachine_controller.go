@@ -47,14 +47,6 @@ const (
 	machineReadyRequeue                  = 5 * time.Minute
 	machineReadyJitterWindow             = 1 * time.Minute
 	instanceTypeUnavailableWait          = 2 * time.Minute
-
-	// These NKE label keys are applied to the backing NICo instance so the VM
-	// records carry the same topology identifiers that Kubernetes nodes expose.
-	labelKeyMachineID = "nke.nvidia.com/machine-id"
-	labelKeySiteID    = "nke.nvidia.com/site-id"
-	labelKeySiteName  = "nke.nvidia.com/site-name"
-	labelKeyVPCID     = "nke.nvidia.com/vpc-id"
-	labelKeyVPCName   = "nke.nvidia.com/vpc-name"
 )
 
 var nicoMachineOwnedConditions = []string{
@@ -394,7 +386,7 @@ func (r *NicoMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	setFailureDomainDrift(ctx, &nicoMachine, instance, nicoCluster.Spec.FailureDomainLabelKey, requestedDomain, observedDomain)
 	// Machine ID and normalized topology names are only known after NICo returns
 	// the instance, so apply them after the status observation step.
-	if err := applyObservedTopologyLabels(ctx, nicoClient, instanceID, instance, &nicoMachine); err != nil {
+	if err := applyObservedTopologyLabels(ctx, nicoClient, r.ProviderConfig, instanceID, instance, &nicoMachine); err != nil {
 		log.Error(err, "failed to apply observed topology labels to NICo instance", "instanceID", instanceID)
 	}
 
@@ -653,9 +645,16 @@ func setObservedTopology(
 	}
 }
 
-func applyObservedTopologyLabels(ctx context.Context, nicoClient nico.API, instanceID string, instance *nicosdk.Instance, nicoMachine *infrav1.NicoMachine) error {
+func applyObservedTopologyLabels(
+	ctx context.Context,
+	nicoClient nico.API,
+	cfg nico.ProviderConfig,
+	instanceID string,
+	instance *nicosdk.Instance,
+	nicoMachine *infrav1.NicoMachine,
+) error {
 	existing := instance.GetLabels()
-	desired := mergeLabels(existing, observedTopologyLabels(nicoMachine))
+	desired := mergeLabels(withoutLegacyTopologyLabels(existing, cfg), observedTopologyLabels(cfg, nicoMachine))
 	if !needsLabelUpdate(existing, desired) {
 		return nil
 	}
@@ -664,28 +663,43 @@ func applyObservedTopologyLabels(ctx context.Context, nicoClient nico.API, insta
 	return err
 }
 
+// withoutLegacyTopologyLabels returns labels without the topology keys under
+// the legacy domain when a different domain is configured. Instances labelled
+// before the domain became configurable are read through their legacy keys and
+// migrated, so only one domain stays live. The input map is never modified.
+func withoutLegacyTopologyLabels(labels map[string]string, cfg nico.ProviderConfig) map[string]string {
+	if cfg.TopologyLabelKey("") == nico.LegacyTopologyLabelKey("") {
+		return labels
+	}
+	out := maps.Clone(labels)
+	for _, name := range nico.TopologyLabelNames {
+		delete(out, nico.LegacyTopologyLabelKey(name))
+	}
+	return out
+}
+
 func needsLabelUpdate(existing, desired map[string]string) bool {
 	return !maps.Equal(desired, existing)
 }
 
 // observedTopologyLabels converts the latest observed NICo instance topology
 // into the NKE labels required on the backing VM.
-func observedTopologyLabels(nicoMachine *infrav1.NicoMachine) map[string]string {
+func observedTopologyLabels(cfg nico.ProviderConfig, nicoMachine *infrav1.NicoMachine) map[string]string {
 	labels := map[string]string{}
 	if nicoMachine.Status.MachineID != "" {
-		labels[labelKeyMachineID] = nicoMachine.Status.MachineID
+		labels[cfg.TopologyLabelKey(nico.TopologyLabelMachineID)] = nicoMachine.Status.MachineID
 	}
 	if nicoMachine.Status.SiteID != "" {
-		labels[labelKeySiteID] = nicoMachine.Status.SiteID
+		labels[cfg.TopologyLabelKey(nico.TopologyLabelSiteID)] = nicoMachine.Status.SiteID
 	}
 	if name := normalizeLabelValue(nicoMachine.Status.SiteName); name != "" {
-		labels[labelKeySiteName] = name
+		labels[cfg.TopologyLabelKey(nico.TopologyLabelSiteName)] = name
 	}
 	if nicoMachine.Status.VPCID != "" {
-		labels[labelKeyVPCID] = nicoMachine.Status.VPCID
+		labels[cfg.TopologyLabelKey(nico.TopologyLabelVPCID)] = nicoMachine.Status.VPCID
 	}
 	if name := normalizeLabelValue(nicoMachine.Status.VPCName); name != "" {
-		labels[labelKeyVPCName] = name
+		labels[cfg.TopologyLabelKey(nico.TopologyLabelVPCName)] = name
 	}
 	return labels
 }
