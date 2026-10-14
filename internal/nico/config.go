@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,8 +43,9 @@ const (
 	DefaultRepairAnnotation        = "nico.nvidia.com/machine-health-issue"
 
 	// DefaultTopologyLabelDomain is the label key domain used for the topology
-	// labels applied to NICo instances. It is also the legacy domain that is
-	// still read, and migrated away from, when a different domain is configured.
+	// labels applied to NICo instances when no domain is configured. It holds no
+	// special status beyond that: topology labels are migrated away from it, and
+	// back to it, on the same rule as any other domain.
 	DefaultTopologyLabelDomain = "nke.nvidia.com"
 )
 
@@ -68,8 +70,8 @@ type ProviderConfig struct {
 
 	// TopologyLabelDomain is the key domain (the prefix before the "/") of the
 	// topology labels written to NICo instances: machine-id, site-id,
-	// site-name, vpc-id and vpc-name. Instances that still carry the legacy
-	// DefaultTopologyLabelDomain keys are read and migrated to this domain.
+	// site-name, vpc-id and vpc-name. Topology labels an instance carries under
+	// any other domain are read and migrated to this one.
 	TopologyLabelDomain string
 
 	// IdentityValidationTimeout bounds each NicoIdentity check, from token
@@ -102,7 +104,7 @@ func (p *ProviderConfig) BindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&p.RepairAnnotation, "repair-annotation", p.RepairAnnotation,
 		"Annotation key on the owner CAPI Machine whose presence triggers a repair flag on the NICo instance before deletion. The value is parsed as JSON ({category, summary, details}), or treated as a plain summary with category Other. Leave empty to disable.")
 	fs.StringVar(&p.TopologyLabelDomain, "topology-label-domain", p.TopologyLabelDomain,
-		"Label key domain for the topology labels (machine-id, site-id, site-name, vpc-id, vpc-name) applied to NICo instances. Labels under the legacy nke.nvidia.com domain are still read and migrated.")
+		"Label key domain for the topology labels (machine-id, site-id, site-name, vpc-id, vpc-name) applied to NICo instances. Topology labels under any other domain are read and migrated to this one.")
 	fs.DurationVar(&p.IdentityValidationTimeout, "provider-identity-validation-timeout", p.IdentityValidationTimeout,
 		"Maximum duration of one NicoIdentity credential check, from token acquisition through the current-tenant read.")
 }
@@ -116,58 +118,66 @@ const (
 	TopologyLabelVPCName   = "vpc-name"
 )
 
-// TopologyLabelNames lists every topology label name CAPNICo manages.
-var TopologyLabelNames = []string{
-	TopologyLabelMachineID,
-	TopologyLabelSiteID,
-	TopologyLabelSiteName,
-	TopologyLabelVPCID,
-	TopologyLabelVPCName,
+// topologyLabelNames is the set of label names CAPNICo manages. A key is
+// CAPNICo's to own when the part after the "/" is in this set, whatever domain
+// precedes it.
+var topologyLabelNames = map[string]struct{}{
+	TopologyLabelMachineID: {},
+	TopologyLabelSiteID:    {},
+	TopologyLabelSiteName:  {},
+	TopologyLabelVPCID:     {},
+	TopologyLabelVPCName:   {},
+}
+
+// topologyDomain is the configured label key domain, or
+// DefaultTopologyLabelDomain when none is set.
+func (p ProviderConfig) topologyDomain() string {
+	if p.TopologyLabelDomain == "" {
+		return DefaultTopologyLabelDomain
+	}
+	return p.TopologyLabelDomain
 }
 
 // TopologyLabelKey returns the full label key for name under the configured
 // domain, falling back to DefaultTopologyLabelDomain when none is set.
 func (p ProviderConfig) TopologyLabelKey(name string) string {
-	domain := p.TopologyLabelDomain
-	if domain == "" {
-		domain = DefaultTopologyLabelDomain
-	}
-	return domain + "/" + name
-}
-
-// LegacyTopologyLabelKey returns the label key for name under
-// DefaultTopologyLabelDomain.
-func LegacyTopologyLabelKey(name string) string {
-	return DefaultTopologyLabelDomain + "/" + name
+	return p.topologyDomain() + "/" + name
 }
 
 // DesiredTopologyLabels returns the labels an instance should carry given its
 // existing labels and the freshly observed topology labels, which are already
-// keyed under the configured domain. When a domain other than
-// DefaultTopologyLabelDomain is configured, legacy topology keys are migrated:
-// each is dropped, and its value is carried over to the configured key when no
-// value was observed, so a failed site or VPC lookup never loses a name. Labels
-// outside the managed topology keys are untouched, and the inputs are never
-// modified.
+// keyed under the configured domain.
+//
+// A topology label under any domain other than the configured one is dropped,
+// and its value is carried over to the configured key when no value was
+// observed, so a failed site or VPC lookup never loses a name. The rule is
+// symmetric: it migrates away from the legacy DefaultTopologyLabelDomain and
+// back to it, so changing the domain in either direction leaves exactly one
+// domain live. That matters because NICo caps an instance at 10 labels, and
+// orphaned topology keys would spend that budget until every later update was
+// rejected.
+//
+// Ownership is claimed by label name, so a topology name under a third-party
+// domain is removed too. Labels whose name CAPNICo does not manage are
+// untouched, and the inputs are never modified.
 func (p ProviderConfig) DesiredTopologyLabels(existing, observed map[string]string) map[string]string {
-	base := existing
+	domain := p.topologyDomain()
+
+	out := make(map[string]string, len(existing)+len(observed))
 	fallback := map[string]string{}
-	if p.TopologyLabelKey("") != LegacyTopologyLabelKey("") {
-		base = maps.Clone(existing)
-		for _, name := range TopologyLabelNames {
-			legacyKey := LegacyTopologyLabelKey(name)
-			delete(base, legacyKey)
-			if _, ok := observed[p.TopologyLabelKey(name)]; ok {
-				continue
-			}
-			if value, ok := existing[legacyKey]; ok {
-				fallback[p.TopologyLabelKey(name)] = value
-			}
+	// Sorted so that two foreign domains carrying the same topology name
+	// resolve to the same winner on every reconcile.
+	for _, key := range slices.Sorted(maps.Keys(existing)) {
+		prefix, name, hasSlash := strings.Cut(key, "/")
+		if _, managed := topologyLabelNames[name]; !hasSlash || !managed || prefix == domain {
+			out[key] = existing[key]
+			continue
+		}
+		if _, observedHere := observed[domain+"/"+name]; !observedHere {
+			fallback[domain+"/"+name] = existing[key]
 		}
 	}
 
-	out := map[string]string{}
-	maps.Copy(out, base)
 	maps.Copy(out, fallback)
 	maps.Copy(out, observed)
 	if len(out) == 0 {
