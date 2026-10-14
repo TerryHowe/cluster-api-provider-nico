@@ -236,7 +236,7 @@ func TestProviderConfigTopologyLabelDomain(t *testing.T) {
 		if err == nil {
 			t.Fatal("Validate() error = nil, want an error")
 		}
-		for _, want := range []string{"example.com", DefaultTopologyLabelDomain, NVKETopologyLabelDomain} {
+		for _, want := range []string{"example.com", LegacyTopologyLabelDomain, NVKETopologyLabelDomain} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("Validate() error = %v, want it to contain %q", err, want)
 			}

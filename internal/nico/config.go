@@ -40,13 +40,20 @@ const (
 	DefaultHardRebootAnnotation    = "nico.nvidia.com/reboot-hard"
 	DefaultRepairAnnotation        = "nico.nvidia.com/machine-health-issue"
 
-	// DefaultTopologyLabelDomain is the label key domain used for the topology
-	// labels applied to NICo instances when none is configured.
-	DefaultTopologyLabelDomain = "nke.nvidia.com"
+	// LegacyTopologyLabelDomain is the domain CAPNICo wrote topology labels
+	// under before the NVKE rename, and still migrates away from.
+	LegacyTopologyLabelDomain = "nke.nvidia.com"
 
-	// NVKETopologyLabelDomain is the domain NVKE moved its own label keys to. It
-	// is the only other value --topology-label-domain accepts.
+	// NVKETopologyLabelDomain is the domain NVKE moved its own label keys to.
+	// These two are the values --topology-label-domain accepts.
 	NVKETopologyLabelDomain = "nvke.nvidia.com"
+
+	// DefaultTopologyLabelDomain is what an unset --topology-label-domain means.
+	// It is still the legacy domain, so taking a new build changes nothing until
+	// the flag is set. Flipping the default once a fleet has migrated is a change
+	// to this line alone: the two domains above state which key is which, and
+	// this one states only which is assumed.
+	DefaultTopologyLabelDomain = LegacyTopologyLabelDomain
 )
 
 // ProviderConfig holds provider-wide settings.
@@ -70,7 +77,7 @@ type ProviderConfig struct {
 
 	// TopologyLabelDomain is the key domain (the prefix before the "/") of the
 	// topology labels written to NICo instances: machine-id, site-id,
-	// site-name, vpc-id and vpc-name. It accepts DefaultTopologyLabelDomain or
+	// site-name, vpc-id and vpc-name. It accepts LegacyTopologyLabelDomain or
 	// NVKETopologyLabelDomain; topology labels an instance carries under the
 	// other one are read and migrated to this one.
 	TopologyLabelDomain string
@@ -141,10 +148,10 @@ func (p ProviderConfig) topologyDomain() string {
 // exactly two accepted values, the labels to migrate away from are a closed
 // set rather than anything that has to be matched by shape.
 func (p ProviderConfig) otherTopologyDomain() string {
-	if p.topologyDomain() == DefaultTopologyLabelDomain {
+	if p.topologyDomain() == LegacyTopologyLabelDomain {
 		return NVKETopologyLabelDomain
 	}
-	return DefaultTopologyLabelDomain
+	return LegacyTopologyLabelDomain
 }
 
 // TopologyLabelKey returns the full label key for name under the configured
@@ -190,10 +197,10 @@ func (p ProviderConfig) DesiredTopologyLabels(existing, observed map[string]stri
 // NicoIdentity settings, so existing flag combinations keep their behavior.
 func (p ProviderConfig) Validate() error {
 	if p.TopologyLabelDomain != "" &&
-		p.TopologyLabelDomain != DefaultTopologyLabelDomain &&
+		p.TopologyLabelDomain != LegacyTopologyLabelDomain &&
 		p.TopologyLabelDomain != NVKETopologyLabelDomain {
 		return fmt.Errorf("--topology-label-domain %q is invalid: must be %q or %q",
-			p.TopologyLabelDomain, DefaultTopologyLabelDomain, NVKETopologyLabelDomain)
+			p.TopologyLabelDomain, LegacyTopologyLabelDomain, NVKETopologyLabelDomain)
 	}
 	if p.IdentityValidationTimeout <= 0 {
 		return fmt.Errorf("--provider-identity-validation-timeout must be positive, got %s", p.IdentityValidationTimeout)
