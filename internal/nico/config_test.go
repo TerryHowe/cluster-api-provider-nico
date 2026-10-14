@@ -227,4 +227,19 @@ func TestProviderConfigTopologyLabelDomain(t *testing.T) {
 			t.Fatalf("Validate() error = %v, want it to contain %q", err, want)
 		}
 	})
+
+	// A well-formed domain is still rejected: the flag accepts two values, not
+	// any DNS subdomain, so that the labels to migrate stay a closed set.
+	t.Run("rejects an unsupported domain", func(t *testing.T) {
+		cfg := parse(t, "--topology-label-domain=example.com")
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("Validate() error = nil, want an error")
+		}
+		for _, want := range []string{"example.com", DefaultTopologyLabelDomain, NVKETopologyLabelDomain} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, want)
+			}
+		}
+	})
 }
