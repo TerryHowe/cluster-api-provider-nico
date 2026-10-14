@@ -356,6 +356,9 @@ func startReconcilers(ctx ginkgo.SpecContext, tc *fixture.Case, workloadFactory 
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 	providerConfig := nico.ProviderConfig{Credentials: types.NamespacedName{Namespace: testNamespace, Name: testDefaultCredentials}}
+	if input, ok := tc.Input("input_topology_label_domain.txt"); ok {
+		providerConfig.TopologyLabelDomain = strings.TrimSpace(input)
+	}
 	gomega.Expect((&NicoClusterReconciler{Client: mgr.GetClient(), Scheme: tc.Scheme, ProviderConfig: providerConfig}).SetupWithManager(ctx, mgr)).To(gomega.Succeed())
 	gomega.Expect((&NicoMachineReconciler{
 		Client:                mgr.GetClient(),
