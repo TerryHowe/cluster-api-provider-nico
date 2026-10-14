@@ -5,8 +5,62 @@ package nico
 
 import (
 	"flag"
+	"maps"
 	"testing"
 )
+
+func TestDesiredTopologyLabels(t *testing.T) {
+	existing := map[string]string{
+		"nke.nvidia.com/site-id":   "site-1",
+		"nke.nvidia.com/site-name": "site-one",
+		"nke.nvidia.com/unrelated": "keep",
+		"team":                     "infra",
+	}
+	custom := ProviderConfig{TopologyLabelDomain: "nico.example.com"}
+	observed := map[string]string{"nico.example.com/site-id": "site-1", "nico.example.com/vpc-id": "vpc-1"}
+
+	t.Run("default domain keeps existing labels and adds observed", func(t *testing.T) {
+		got := ProviderConfig{}.DesiredTopologyLabels(existing, map[string]string{"nke.nvidia.com/vpc-id": "vpc-1"})
+		want := map[string]string{
+			"nke.nvidia.com/site-id":   "site-1",
+			"nke.nvidia.com/site-name": "site-one",
+			"nke.nvidia.com/unrelated": "keep",
+			"nke.nvidia.com/vpc-id":    "vpc-1",
+			"team":                     "infra",
+		}
+		if !maps.Equal(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("custom domain migrates legacy keys and keeps unrelated labels", func(t *testing.T) {
+		got := custom.DesiredTopologyLabels(existing, observed)
+		want := map[string]string{
+			"nico.example.com/site-id":   "site-1",
+			"nico.example.com/site-name": "site-one", // carried over: no observed name
+			"nico.example.com/vpc-id":    "vpc-1",
+			"nke.nvidia.com/unrelated":   "keep",
+			"team":                       "infra",
+		}
+		if !maps.Equal(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("observed value wins over the legacy value", func(t *testing.T) {
+		got := custom.DesiredTopologyLabels(existing, map[string]string{"nico.example.com/site-name": "renamed"})
+		if got["nico.example.com/site-name"] != "renamed" {
+			t.Fatalf("got %v", got)
+		}
+	})
+
+	t.Run("inputs are not modified", func(t *testing.T) {
+		custom.DesiredTopologyLabels(existing, observed)
+		if len(existing) != 4 || len(observed) != 2 {
+			t.Fatalf("inputs modified: %v %v", existing, observed)
+		}
+	})
+}
 
 func TestProviderConfigTopologyLabelDomain(t *testing.T) {
 	parse := func(t *testing.T, args ...string) ProviderConfig {

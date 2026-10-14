@@ -654,28 +654,13 @@ func applyObservedTopologyLabels(
 	nicoMachine *infrav1.NicoMachine,
 ) error {
 	existing := instance.GetLabels()
-	desired := mergeLabels(withoutLegacyTopologyLabels(existing, cfg), observedTopologyLabels(cfg, nicoMachine))
+	desired := cfg.DesiredTopologyLabels(existing, observedTopologyLabels(cfg, nicoMachine))
 	if !needsLabelUpdate(existing, desired) {
 		return nil
 	}
 
 	_, err := nicoClient.ApplyInstanceLabels(ctx, instanceID, desired)
 	return err
-}
-
-// withoutLegacyTopologyLabels returns labels without the topology keys under
-// the legacy domain when a different domain is configured. Instances labelled
-// before the domain became configurable are read through their legacy keys and
-// migrated, so only one domain stays live. The input map is never modified.
-func withoutLegacyTopologyLabels(labels map[string]string, cfg nico.ProviderConfig) map[string]string {
-	if cfg.TopologyLabelKey("") == nico.LegacyTopologyLabelKey("") {
-		return labels
-	}
-	out := maps.Clone(labels)
-	for _, name := range nico.TopologyLabelNames {
-		delete(out, nico.LegacyTopologyLabelKey(name))
-	}
-	return out
 }
 
 func needsLabelUpdate(existing, desired map[string]string) bool {

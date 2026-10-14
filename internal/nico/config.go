@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -138,6 +139,41 @@ func (p ProviderConfig) TopologyLabelKey(name string) string {
 // DefaultTopologyLabelDomain.
 func LegacyTopologyLabelKey(name string) string {
 	return DefaultTopologyLabelDomain + "/" + name
+}
+
+// DesiredTopologyLabels returns the labels an instance should carry given its
+// existing labels and the freshly observed topology labels, which are already
+// keyed under the configured domain. When a domain other than
+// DefaultTopologyLabelDomain is configured, legacy topology keys are migrated:
+// each is dropped, and its value is carried over to the configured key when no
+// value was observed, so a failed site or VPC lookup never loses a name. Labels
+// outside the managed topology keys are untouched, and the inputs are never
+// modified.
+func (p ProviderConfig) DesiredTopologyLabels(existing, observed map[string]string) map[string]string {
+	base := existing
+	fallback := map[string]string{}
+	if p.TopologyLabelKey("") != LegacyTopologyLabelKey("") {
+		base = maps.Clone(existing)
+		for _, name := range TopologyLabelNames {
+			legacyKey := LegacyTopologyLabelKey(name)
+			delete(base, legacyKey)
+			if _, ok := observed[p.TopologyLabelKey(name)]; ok {
+				continue
+			}
+			if value, ok := existing[legacyKey]; ok {
+				fallback[p.TopologyLabelKey(name)] = value
+			}
+		}
+	}
+
+	out := map[string]string{}
+	maps.Copy(out, base)
+	maps.Copy(out, fallback)
+	maps.Copy(out, observed)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Validate reports provider settings that cannot work. It checks only the
