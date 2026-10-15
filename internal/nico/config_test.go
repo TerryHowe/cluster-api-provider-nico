@@ -196,8 +196,8 @@ func TestProviderConfigTopologyLabelDomain(t *testing.T) {
 
 	t.Run("defaults to the legacy domain", func(t *testing.T) {
 		cfg := parse(t)
-		if cfg.TopologyLabelDomain != DefaultTopologyLabelDomain {
-			t.Fatalf("TopologyLabelDomain = %q, want %q", cfg.TopologyLabelDomain, DefaultTopologyLabelDomain)
+		if cfg.TopologyLabelDomain != LegacyTopologyLabelDomain {
+			t.Fatalf("TopologyLabelDomain = %q, want %q", cfg.TopologyLabelDomain, LegacyTopologyLabelDomain)
 		}
 		if got := cfg.TopologyLabelKey(TopologyLabelSiteID); got != "nke.nvidia.com/site-id" {
 			t.Fatalf("TopologyLabelKey() = %q", got)

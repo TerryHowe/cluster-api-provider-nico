@@ -42,11 +42,18 @@ const (
 	DefaultHardRebootAnnotation    = "nico.nvidia.com/reboot-hard"
 	DefaultRepairAnnotation        = "nico.nvidia.com/machine-health-issue"
 
-	// DefaultTopologyLabelDomain is the label key domain used for the topology
-	// labels applied to NICo instances when no domain is configured. It holds no
-	// special status beyond that: topology labels are migrated away from it, and
-	// back to it, on the same rule as any other domain.
-	DefaultTopologyLabelDomain = "nke.nvidia.com"
+	// LegacyTopologyLabelDomain is the domain CAPNICo wrote topology labels
+	// under before the NVKE rename. It holds no special status in the migration
+	// rule: topology labels are migrated away from it, and back to it, exactly
+	// as they are for any other domain.
+	LegacyTopologyLabelDomain = "nke.nvidia.com"
+
+	// DefaultTopologyLabelDomain is what an unset --topology-label-domain means.
+	// It is still the legacy domain, so taking a new build changes nothing until
+	// the flag is set. Flipping the default once a fleet has migrated is a change
+	// to this line alone: the constant above states which key the legacy one is,
+	// and this one states only which domain is assumed.
+	DefaultTopologyLabelDomain = LegacyTopologyLabelDomain
 )
 
 // ProviderConfig holds provider-wide settings.
@@ -151,9 +158,9 @@ func (p ProviderConfig) TopologyLabelKey(name string) string {
 // A topology label under any domain other than the configured one is dropped,
 // and its value is carried over to the configured key when no value was
 // observed, so a failed site or VPC lookup never loses a name. The rule is
-// symmetric: it migrates away from the legacy DefaultTopologyLabelDomain and
-// back to it, so changing the domain in either direction leaves exactly one
-// domain live. That matters because NICo caps an instance at 10 labels, and
+// symmetric: it migrates away from LegacyTopologyLabelDomain and back to it,
+// so changing the domain in either direction leaves exactly one domain live.
+// That matters because NICo caps an instance at 10 labels, and
 // orphaned topology keys would spend that budget until every later update was
 // rejected.
 //
