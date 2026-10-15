@@ -559,8 +559,12 @@ failed, is carried over from the key it replaces rather than dropped. Labels
 outside these five names are left alone, including other labels under either
 domain.
 
-The flag is a migration switch rather than durable configuration. Plan to set
-it once per install, then stop passing it when the legacy domain is removed.
+The flag is a migration switch rather than durable configuration, but it is not
+something to clear once the migration finishes. The default is `false`, so an
+install that stops passing the flag moves its five topology keys back to
+`nke.nvidia.com` on the next reconcile. Set the flag once per install and keep
+it set. Stop passing it only after a release removes the legacy domain and
+writes `nvke.nvidia.com` unconditionally.
 
 ### Rolling Back a Topology Label Migration
 

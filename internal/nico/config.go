@@ -162,8 +162,9 @@ func (p ProviderConfig) TopologyLabelKey(name string) string {
 // keyed under the domain in use.
 //
 // Topology labels under the other domain are migrated: each is dropped, and its
-// value carried over to the key in use when no value was observed, so a failed
-// site or VPC lookup never loses a name. The rule runs in whichever direction
+// value carried over to the key in use when neither this reconcile nor that key
+// already has one, so a failed site or VPC lookup never loses a name without
+// reverting a newer value. The rule runs in whichever direction
 // the flag points, so flipping it leaves exactly one domain live. That matters
 // because NICo caps an instance at 10 labels, and orphaned topology keys would
 // spend that budget until every later update was rejected.
@@ -178,7 +179,16 @@ func (p ProviderConfig) DesiredTopologyLabels(existing, observed map[string]stri
 	for _, name := range topologyLabelNames {
 		value, had := out[other+"/"+name]
 		delete(out, other+"/"+name)
-		if _, observedHere := observed[domain+"/"+name]; had && !observedHere {
+		if !had {
+			continue
+		}
+		// The carried value is the stalest of the three, so it is used only
+		// when neither this reconcile nor the key in use has one. An instance
+		// carrying both domains otherwise reverts to the value it replaced.
+		if _, inUse := out[domain+"/"+name]; inUse {
+			continue
+		}
+		if _, observedHere := observed[domain+"/"+name]; !observedHere {
 			out[domain+"/"+name] = value
 		}
 	}

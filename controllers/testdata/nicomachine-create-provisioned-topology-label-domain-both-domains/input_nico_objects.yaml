@@ -1,0 +1,28 @@
+# The instance carries both domains for vpc-name, and the VPC read fails, so
+# vpc-name is never observed on this reconcile. The value already on the key in
+# use has to win over the staler one it replaces.
+vpcs:
+  statusCode: 500
+instances:
+  resources:
+  - org: org-1
+    resource:
+      id: seeded-1
+      interfaces:
+      - ipAddresses:
+        - 10.0.0.10
+        subnetId: subnet-1
+      labels:
+        nke.nvidia.com/machine-id: machine-id-1
+        nke.nvidia.com/site-id: site-1
+        nke.nvidia.com/site-name: fake-site
+        nke.nvidia.com/vpc-id: vpc-1
+        nke.nvidia.com/vpc-name: stale-vpc
+        nvke.nvidia.com/vpc-name: fake-vpc
+        team: infra
+      machineId: machine-id-1
+      name: machine-1
+      siteId: site-1
+      status: Ready
+      tenantId: tenant-1
+      vpcId: vpc-1
