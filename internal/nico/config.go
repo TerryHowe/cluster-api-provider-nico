@@ -20,7 +20,6 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -41,10 +40,15 @@ const (
 	DefaultHardRebootAnnotation    = "nico.nvidia.com/reboot-hard"
 	DefaultRepairAnnotation        = "nico.nvidia.com/machine-health-issue"
 
-	// DefaultTopologyLabelDomain is the label key domain used for the topology
-	// labels applied to NICo instances. It is also the legacy domain that is
-	// still read, and migrated away from, when a different domain is configured.
-	DefaultTopologyLabelDomain = "nke.nvidia.com"
+	// LegacyTopologyLabelDomain is the domain CAPNICo wrote topology labels
+	// under before the NVKE rename, and the domain it still writes until
+	// --migrate-topology-labels-to-nvke is set.
+	LegacyTopologyLabelDomain = "nke.nvidia.com"
+
+	// NVKETopologyLabelDomain is the domain NVKE moved its own label keys to,
+	// and the migration target. These two are the only domains CAPNICo writes:
+	// the flag selects between them, so the keys to migrate are a closed set.
+	NVKETopologyLabelDomain = "nvke.nvidia.com"
 )
 
 // ProviderConfig holds provider-wide settings.
@@ -66,11 +70,17 @@ type ProviderConfig struct {
 	// disables the behaviour.
 	RepairAnnotation string
 
-	// TopologyLabelDomain is the key domain (the prefix before the "/") of the
-	// topology labels written to NICo instances: machine-id, site-id,
-	// site-name, vpc-id and vpc-name. Instances that still carry the legacy
-	// DefaultTopologyLabelDomain keys are read and migrated to this domain.
-	TopologyLabelDomain string
+	// MigrateTopologyLabelsToNVKE switches the key domain of the topology
+	// labels written to NICo instances (machine-id, site-id, site-name, vpc-id
+	// and vpc-name) from LegacyTopologyLabelDomain to NVKETopologyLabelDomain.
+	// Topology labels an instance carries under the domain that is not in use
+	// are read and migrated to the one that is, in whichever direction this
+	// field points.
+	//
+	// This is a migration switch, not durable configuration. It exists so a
+	// fleet can move domains one install at a time, and it is expected to be
+	// deleted along with the legacy domain once nothing writes it.
+	MigrateTopologyLabelsToNVKE bool
 
 	// IdentityValidationTimeout bounds each NicoIdentity check, from token
 	// acquisition through the current-tenant read.
@@ -87,9 +97,6 @@ func (p *ProviderConfig) BindFlags(fs *flag.FlagSet) {
 	if p.RepairAnnotation == "" {
 		p.RepairAnnotation = DefaultRepairAnnotation
 	}
-	if p.TopologyLabelDomain == "" {
-		p.TopologyLabelDomain = DefaultTopologyLabelDomain
-	}
 	if p.IdentityValidationTimeout == 0 {
 		p.IdentityValidationTimeout = DefaultCredentialValidationTimeout
 	}
@@ -101,8 +108,8 @@ func (p *ProviderConfig) BindFlags(fs *flag.FlagSet) {
 		"CAPI Machine annotation key used to request a graceful reboot with hard fallback.")
 	fs.StringVar(&p.RepairAnnotation, "repair-annotation", p.RepairAnnotation,
 		"Annotation key on the owner CAPI Machine whose presence triggers a repair flag on the NICo instance before deletion. The value is parsed as JSON ({category, summary, details}), or treated as a plain summary with category Other. Leave empty to disable.")
-	fs.StringVar(&p.TopologyLabelDomain, "topology-label-domain", p.TopologyLabelDomain,
-		"Label key domain for the topology labels (machine-id, site-id, site-name, vpc-id, vpc-name) applied to NICo instances. Labels under the legacy nke.nvidia.com domain are still read and migrated.")
+	fs.BoolVar(&p.MigrateTopologyLabelsToNVKE, "migrate-topology-labels-to-nvke", p.MigrateTopologyLabelsToNVKE,
+		"Write the topology labels (machine-id, site-id, site-name, vpc-id, vpc-name) on NICo instances under nvke.nvidia.com instead of nke.nvidia.com. Topology labels under the domain not in use are read and migrated to the one that is, in either direction.")
 	fs.DurationVar(&p.IdentityValidationTimeout, "provider-identity-validation-timeout", p.IdentityValidationTimeout,
 		"Maximum duration of one NicoIdentity credential check, from token acquisition through the current-tenant read.")
 }
@@ -116,8 +123,8 @@ const (
 	TopologyLabelVPCName   = "vpc-name"
 )
 
-// TopologyLabelNames lists every topology label name CAPNICo manages.
-var TopologyLabelNames = []string{
+// topologyLabelNames lists every topology label name CAPNICo manages.
+var topologyLabelNames = []string{
 	TopologyLabelMachineID,
 	TopologyLabelSiteID,
 	TopologyLabelSiteName,
@@ -125,50 +132,49 @@ var TopologyLabelNames = []string{
 	TopologyLabelVPCName,
 }
 
-// TopologyLabelKey returns the full label key for name under the configured
-// domain, falling back to DefaultTopologyLabelDomain when none is set.
-func (p ProviderConfig) TopologyLabelKey(name string) string {
-	domain := p.TopologyLabelDomain
-	if domain == "" {
-		domain = DefaultTopologyLabelDomain
+// topologyDomains returns the domain CAPNICo writes topology labels under and
+// the one it migrates away from. There are exactly two, so the second is always
+// the one the first is not.
+func (p ProviderConfig) topologyDomains() (domain, other string) {
+	if p.MigrateTopologyLabelsToNVKE {
+		return NVKETopologyLabelDomain, LegacyTopologyLabelDomain
 	}
-	return domain + "/" + name
+	return LegacyTopologyLabelDomain, NVKETopologyLabelDomain
 }
 
-// LegacyTopologyLabelKey returns the label key for name under
-// DefaultTopologyLabelDomain.
-func LegacyTopologyLabelKey(name string) string {
-	return DefaultTopologyLabelDomain + "/" + name
+// TopologyLabelKey returns the full label key for name under the domain
+// currently in use.
+func (p ProviderConfig) TopologyLabelKey(name string) string {
+	domain, _ := p.topologyDomains()
+	return domain + "/" + name
 }
 
 // DesiredTopologyLabels returns the labels an instance should carry given its
 // existing labels and the freshly observed topology labels, which are already
-// keyed under the configured domain. When a domain other than
-// DefaultTopologyLabelDomain is configured, legacy topology keys are migrated:
-// each is dropped, and its value is carried over to the configured key when no
-// value was observed, so a failed site or VPC lookup never loses a name. Labels
-// outside the managed topology keys are untouched, and the inputs are never
-// modified.
+// keyed under the domain in use.
+//
+// Topology labels under the other domain are migrated: each is dropped, and its
+// value carried over to the key in use when no value was observed, so a failed
+// site or VPC lookup never loses a name. The rule runs in whichever direction
+// the flag points, so flipping it leaves exactly one domain live. That matters
+// because NICo caps an instance at 10 labels, and orphaned topology keys would
+// spend that budget until every later update was rejected.
+//
+// Labels outside the managed topology keys are untouched, and the inputs are
+// never modified.
 func (p ProviderConfig) DesiredTopologyLabels(existing, observed map[string]string) map[string]string {
-	base := existing
-	fallback := map[string]string{}
-	if p.TopologyLabelKey("") != LegacyTopologyLabelKey("") {
-		base = maps.Clone(existing)
-		for _, name := range TopologyLabelNames {
-			legacyKey := LegacyTopologyLabelKey(name)
-			delete(base, legacyKey)
-			if _, ok := observed[p.TopologyLabelKey(name)]; ok {
-				continue
-			}
-			if value, ok := existing[legacyKey]; ok {
-				fallback[p.TopologyLabelKey(name)] = value
-			}
+	domain, other := p.topologyDomains()
+
+	out := make(map[string]string, len(existing)+len(observed))
+	maps.Copy(out, existing)
+	for _, name := range topologyLabelNames {
+		value, had := out[other+"/"+name]
+		delete(out, other+"/"+name)
+		if _, observedHere := observed[domain+"/"+name]; had && !observedHere {
+			out[domain+"/"+name] = value
 		}
 	}
 
-	out := map[string]string{}
-	maps.Copy(out, base)
-	maps.Copy(out, fallback)
 	maps.Copy(out, observed)
 	if len(out) == 0 {
 		return nil
@@ -179,11 +185,6 @@ func (p ProviderConfig) DesiredTopologyLabels(existing, observed map[string]stri
 // Validate reports provider settings that cannot work. It checks only the
 // NicoIdentity settings, so existing flag combinations keep their behavior.
 func (p ProviderConfig) Validate() error {
-	if p.TopologyLabelDomain != "" {
-		if errs := validation.IsDNS1123Subdomain(p.TopologyLabelDomain); len(errs) > 0 {
-			return fmt.Errorf("--topology-label-domain %q is invalid: %s", p.TopologyLabelDomain, strings.Join(errs, "; "))
-		}
-	}
 	if p.IdentityValidationTimeout <= 0 {
 		return fmt.Errorf("--provider-identity-validation-timeout must be positive, got %s", p.IdentityValidationTimeout)
 	}

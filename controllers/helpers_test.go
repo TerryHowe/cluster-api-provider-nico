@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -356,8 +357,10 @@ func startReconcilers(ctx ginkgo.SpecContext, tc *fixture.Case, workloadFactory 
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 	providerConfig := nico.ProviderConfig{Credentials: types.NamespacedName{Namespace: testNamespace, Name: testDefaultCredentials}}
-	if input, ok := tc.Input("input_topology_label_domain.txt"); ok {
-		providerConfig.TopologyLabelDomain = strings.TrimSpace(input)
+	if input, ok := tc.Input("input_migrate_topology_labels_to_nvke.txt"); ok {
+		value, err := strconv.ParseBool(strings.TrimSpace(input))
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		providerConfig.MigrateTopologyLabelsToNVKE = value
 	}
 	gomega.Expect((&NicoClusterReconciler{Client: mgr.GetClient(), Scheme: tc.Scheme, ProviderConfig: providerConfig}).SetupWithManager(ctx, mgr)).To(gomega.Succeed())
 	gomega.Expect((&NicoMachineReconciler{
