@@ -539,16 +539,28 @@ The key is configurable with a manager flag:
 ## Topology Labels
 
 CAPNICo labels each backing NICo instance with `machine-id`, `site-id`,
-`site-name`, `vpc-id` and `vpc-name`. The label key domain defaults to
-`nke.nvidia.com` and is configurable with a manager flag:
+`site-name`, `vpc-id` and `vpc-name`. These keys use the `nke.nvidia.com`
+domain. A manager flag moves them to `nvke.nvidia.com`:
 
-* `--topology-label-domain`
+* `--migrate-topology-labels-to-nvke`
 
-Both forms are read. When a different domain is configured, an instance that
-still carries the legacy `nke.nvidia.com/*` topology keys has them replaced by
-keys under the configured domain on its next reconcile, so only one domain stays
-live. Other labels on the instance are left alone. With the default domain
-nothing changes.
+The flag is a boolean and defaults to `false`, so a new release changes nothing
+until you set it. Set it to `true` and each instance has its five topology keys
+rewritten under `nvke.nvidia.com` on its next reconcile. Set it back to `false`
+and they are rewritten under `nke.nvidia.com`. Either way the keys under the
+domain that is no longer in use are removed, so exactly one domain stays live.
+
+Removing the keys matters because NICo caps an instance at 10 labels, which a
+CAPI-provisioned instance already reaches. Leaving five orphaned keys behind
+would put every later label update over the cap.
+
+A value that a reconcile does not observe, such as a VPC name whose lookup
+failed, is carried over from the key it replaces rather than dropped. Labels
+outside these five names are left alone, including other labels under either
+domain.
+
+The flag is a migration switch rather than durable configuration. Plan to set
+it once per install, then stop passing it when the legacy domain is removed.
 
 ## Machine Reboot
 

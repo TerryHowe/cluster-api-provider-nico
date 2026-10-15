@@ -6,6 +6,7 @@ package nico
 import (
 	"context"
 	"flag"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -196,22 +197,24 @@ func TestProviderConfigTopologyLabelDomain(t *testing.T) {
 
 	t.Run("defaults to the legacy domain", func(t *testing.T) {
 		cfg := parse(t)
-		if cfg.TopologyLabelDomain != DefaultTopologyLabelDomain {
-			t.Fatalf("TopologyLabelDomain = %q, want %q", cfg.TopologyLabelDomain, DefaultTopologyLabelDomain)
+		if cfg.MigrateTopologyLabelsToNVKE {
+			t.Fatal("MigrateTopologyLabelsToNVKE = true, want the migration off by default")
 		}
 		if got := cfg.TopologyLabelKey(TopologyLabelSiteID); got != "nke.nvidia.com/site-id" {
 			t.Fatalf("TopologyLabelKey() = %q", got)
 		}
 	})
 
-	t.Run("zero value falls back to the legacy domain", func(t *testing.T) {
+	// The zero ProviderConfig is the unconfigured one, so it has to write the
+	// legacy keys rather than a key with an empty domain.
+	t.Run("zero value writes the legacy domain", func(t *testing.T) {
 		if got := (ProviderConfig{}).TopologyLabelKey(TopologyLabelVPCName); got != "nke.nvidia.com/vpc-name" {
 			t.Fatalf("TopologyLabelKey() = %q", got)
 		}
 	})
 
-	t.Run("flag overrides the domain", func(t *testing.T) {
-		cfg := parse(t, "--topology-label-domain=nvke.nvidia.com")
+	t.Run("flag switches the domain", func(t *testing.T) {
+		cfg := parse(t, "--migrate-topology-labels-to-nvke=true")
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate() error = %v", err)
 		}
@@ -220,11 +223,15 @@ func TestProviderConfigTopologyLabelDomain(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects an invalid domain", func(t *testing.T) {
-		const want = "--topology-label-domain"
-		cfg := parse(t, "--topology-label-domain=Not_A_Domain/")
-		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("Validate() error = %v, want it to contain %q", err, want)
+	// A boolean has no invalid setting to reject, so the only bad input left is
+	// one the flag package itself refuses.
+	t.Run("rejects a non-boolean value", func(t *testing.T) {
+		var cfg ProviderConfig
+		fs := flag.NewFlagSet("manager", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		cfg.BindFlags(fs)
+		if err := fs.Parse([]string{"--migrate-topology-labels-to-nvke=sometimes"}); err == nil {
+			t.Fatal("Parse() error = nil, want an error")
 		}
 	})
 }
