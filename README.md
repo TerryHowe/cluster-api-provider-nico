@@ -562,6 +562,35 @@ domain.
 The flag is a migration switch rather than durable configuration. Plan to set
 it once per install, then stop passing it when the legacy domain is removed.
 
+### Rolling Back a Topology Label Migration
+
+To undo a migration, set `--migrate-topology-labels-to-nvke` back to `false`
+before you roll the manager image back. The order matters, and reversing it
+strands the labels.
+
+Follow these steps:
+
+1. Set `--migrate-topology-labels-to-nvke=false`, or remove the flag, on the
+   manager image that defines it.
+2. Wait until every `NicoMachine` reconciles once. Each instance has its five
+   `nvke.nvidia.com` topology keys replaced by `nke.nvidia.com` keys in a
+   single update, so no instance exceeds the label cap at any point.
+3. Roll the manager image back.
+
+A manager image that predates this flag merges the topology labels it knows
+about into whatever the instance already carries, and it never removes a key.
+Such an image does not recognize the `nvke.nvidia.com` keys, so it tries to add
+five `nke.nvidia.com` keys to an instance that already holds 10 labels. NICo
+rejects the update because it exceeds the cap of 10, the controller logs the
+error and continues, and the next reconcile repeats it. The instance keeps the
+`nvke.nvidia.com` keys, never receives the `nke.nvidia.com` keys, and no
+condition or event reports the problem.
+
+If you have to roll back without running step 1, for example because the newer
+image is too broken to run, then roll back only to an image that still supports
+`--migrate-topology-labels-to-nvke`. Treat the first release that offers the
+flag as the oldest image you can roll back to on a migrated install.
+
 ## Machine Reboot
 
 Set one of these annotations to a non-empty value on the owning CAPI `Machine`.

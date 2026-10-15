@@ -80,6 +80,14 @@ type ProviderConfig struct {
 	// This is a migration switch, not durable configuration. It exists so a
 	// fleet can move domains one install at a time, and it is expected to be
 	// deleted along with the legacy domain once nothing writes it.
+	//
+	// Clearing this field is the only supported way back. A manager image
+	// predating the flag merges its own keys into whatever the instance
+	// carries and removes nothing, so it cannot undo a migration: it would
+	// add five legacy keys to an instance already holding 10 labels and be
+	// rejected on the cap every reconcile. Clear the field and let every
+	// NicoMachine reconcile before rolling such an image back. See "Rolling
+	// Back a Topology Label Migration" in the README.
 	MigrateTopologyLabelsToNVKE bool
 
 	// IdentityValidationTimeout bounds each NicoIdentity check, from token
