@@ -576,9 +576,12 @@ Follow these steps:
 
 1. Set `--migrate-topology-labels-to-nvke=false`, or remove the flag, on the
    manager image that defines it.
-2. Wait until every `NicoMachine` reconciles once. Each instance has its five
-   `nvke.nvidia.com` topology keys replaced by `nke.nvidia.com` keys in a
-   single update, so no instance exceeds the label cap at any point.
+2. Confirm that every instance now carries the five `nke.nvidia.com` topology
+   keys and no `nvke.nvidia.com` topology keys. Each instance has its keys
+   replaced in a single update, so no instance exceeds the label cap at any
+   point, but check the labels themselves rather than waiting for a reconcile
+   to complete. A reconcile whose label update NICo rejects logs the error and
+   continues, so an instance can reconcile without its labels moving.
 3. Roll the manager image back.
 
 A manager image that predates this flag merges the topology labels it knows
